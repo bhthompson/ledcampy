@@ -1,6 +1,6 @@
 #! /usr/bin/python
 # LED control script using a USB camera interface.
-# This depends on the ledconpy led_control package.
+# This depends on the ledconpy led_array package.
 
 import argparse
 import atexit
@@ -9,8 +9,40 @@ import led_array
 import logging
 import sys
 
-_CAMERA_FRAME_W = 352
-_CAMERA_FRAME_H = 288
+_CAMERA_FRAME_W = 160
+_CAMERA_FRAME_H = 120
+
+def average_of_region(image, v_start = .25, v_end = .75, h_start = .25,
+                      h_end = .75):
+  """Find the average RGB values for a region of an image, the region is
+  defined by relative fractions into the image."""
+  if v_start > v_end or h_start > h_end or v_end > 1 or h_end > 1:
+    logging.error('Invalid region parameters! v_start: %f, v_end: %f, '
+                  'h_start: %f, h_end: %f', v_start, v_end, h_start, h_end)
+    return
+  (v, h, c) = image.shape
+  if c != 3:
+    logging.error('Image is not 3 channel, only BGR numpy array is supported.')
+    return
+  logging.debug('Using image dimensions of: %dx%d @%dbpp', h, v, c)
+  # Be warned, there is a reasonable chance of overflowing here, so
+  # we use long variables.
+  r_sum = long(0)
+  g_sum = long(0)
+  b_sum = long(0)
+  region = image[(v * v_start):(v * v_end), (h * h_start):(h * h_end)]
+  for v_pix in range(region.shape[0]): 
+    for h_pix in range(region.shape[1]):
+      #BGR ordering
+      r_sum = r_sum + image[h_pix, v_pix, 2]
+      g_sum = g_sum + image[h_pix, v_pix, 1]
+      b_sum = b_sum + image[h_pix, v_pix, 0]
+  logging.debug('r_sum: %d, g_sum: %d, b_sum:%d', r_sum, g_sum, b_sum)
+  logging.debug('Total sampled pixels: %d', region.size)
+  r_avg = r_sum / region.size
+  g_avg = g_sum / region.size
+  b_avg = b_sum / region.size
+  return (r_avg, g_avg, b_avg)
 
 def scale_to_pwm(r, g, b, pwm_max):
   """Scale the RGB value to within the maximum PWM value."""
@@ -67,10 +99,7 @@ def main():
     sys.exit()
 
   while(1):
-    # Just pick an arbitrary pixel in the middle for now.
-    r = image[175, 144, 0]
-    g = image[175, 144, 1]
-    b = image[175, 144, 2]
+    r, g, b = average_of_region(image)
     logging.debug('R: %d, G: %d, B: %d', r, g, b)
     r_scaled, g_scaled, b_scaled = scale_to_pwm(r, g, b, args.pwm_max_value)
     array.set_rgb(r_scaled, g_scaled, b_scaled)
