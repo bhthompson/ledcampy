@@ -89,24 +89,33 @@ class CameraProcessor:
     logging.debug('Scaled R:%d, G:%d, B:%d', r_scaled, g_scaled, b_scaled)
     return (r_scaled, g_scaled, b_scaled)
 
-def cam_thread_func(cam_processor, array, exit_event):
-  while(1):
-    image = cam_processor.capture_image()
-    r, g, b = cam_processor.average_and_scale(image)
-    array.set_rgb(r, g, b)
-    if exit_event.is_set():
-      logging.debug('cam_thread_func: exit event caught.')
-      array.__exit__()
-      break
+class ControlThreads:
+  """Control threads which need to share state information."""
+  def __init__(self, cam_processor, array, exit_event):
+    self.cam_processor = cam_processor
+    self.array = array
+    self.exit_event = exit_event
+    self.r = 0
+    self.g = 0
+    self.b = 0
 
-def led_thread_func(array, exit_event):
-  while(1):
-    #TODO: move LED control to here taking values from the
-    #camera thread. This is just a dummy thread now.
-    time.sleep(.5)
-    if exit_event.is_set():
-      logging.debug('led_thread_func: exit event caught.')
-      break
+  def cam_thread_func(self):
+    while(1):
+      image = self.cam_processor.capture_image()
+      self.r, self.g, self.b = self.cam_processor.average_and_scale(image)
+      if self.exit_event.is_set():
+        logging.debug('cam_thread_func: exit event caught.')
+        self.array.__exit__()
+        break
+
+  def led_thread_func(self):
+    while(1):
+      #TODO: take an event from the camera thread to start the fade
+      #transitions within a maximum rate of change.
+      self.array.fade(self.r, self.g, self.b, .1)
+      if self.exit_event.is_set():
+        logging.debug('led_thread_func: exit event caught.')
+        break
 
 def main():
   def exit_handler(signal, frame):
@@ -146,14 +155,13 @@ def main():
     sys.exit()
 
   exit_event = threading.Event()
+  control_threads = ControlThreads(cam_processor, array, exit_event)
   signal.signal(signal.SIGINT, exit_handler)
-  led_thread = threading.Thread(target=led_thread_func,
-                                args=(array, exit_event))
-  cam_thread = threading.Thread(target=cam_thread_func,
-                                args=(cam_processor, array, exit_event))
-
+  led_thread = threading.Thread(target=control_threads.led_thread_func)
+  cam_thread = threading.Thread(target=control_threads.cam_thread_func)
   cam_thread.start()
   led_thread.start()
+
   while(1):
     #Main is basicaly done, we just keep alive so we can notify the threads
     #if an exit condition is detected.
