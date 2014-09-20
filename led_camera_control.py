@@ -172,6 +172,7 @@ def main():
     cv.SaveImage('test.png', cv.fromarray(image))
     logging.info('Running basic RGB LED test.')
     array.test_colors(1.0)
+    array.__exit__()
     sys.exit()
 
   exit_event = threading.Event()
