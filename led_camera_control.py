@@ -16,7 +16,7 @@ _CAMERA_FRAME_H = 120
 
 class CameraProcessor:
   """Camera processing mechanisms for finding values to control RGB LEDs."""
-  def __init__(self, pwm_max):
+  def __init__(self, pwm_max, r_bal = 1.0, g_bal = 1.0, b_bal = 1.0):
     self.cam = cv2.VideoCapture(0)
     if not self.cam.isOpened():
       logging.error('Failed to initialize camera.')
@@ -26,10 +26,14 @@ class CameraProcessor:
     self.last_r = 0
     self.last_g = 0
     self.last_b = 0
+    self.r_balance = r_bal
+    self.g_balance = g_bal
+    self.b_balance = b_bal
     self.pwm_max = pwm_max
 
   def average_and_scale(self, image):
     r, g, b = self.average_of_region(image)
+    r, g, b = self.color_balance(r, g, b)
     return self.scale_to_pwm(r, g, b)
 
   def average_of_region(self, image, v_start = .25, v_end = .75, h_start = .25,
@@ -71,6 +75,16 @@ class CameraProcessor:
       logging.warning('Failed to read from camera.')
     return image
 
+  def color_balance(self, r, g, b):
+    """Balance the colors by scaling down the overly predominant colors
+    which the camera generates."""
+    r_corrected = r * self.r_balance
+    g_corrected = g * self.g_balance
+    b_corrected = b * self.b_balance
+    logging.debug('Colors Balanced R: %d, G: %d, B: %d', r_corrected,
+                  g_corrected, b_corrected)
+    return (r_corrected, g_corrected, b_corrected)
+
   def scale_to_pwm(self, r, g, b):
     """Scale the RGB value to within the maximum PWM value."""
     #Widen the scaling so the lowest value is effectively minimized.
@@ -100,6 +114,7 @@ class ControlThreads:
     self.b = 0
 
   def cam_thread_func(self):
+    #TODO: find some way to determine when we should be off.
     while(1):
       image = self.cam_processor.capture_image()
       self.r, self.g, self.b = self.cam_processor.average_and_scale(image)
@@ -128,8 +143,6 @@ def main():
   parser.add_argument('-v', '--verbose', action='count')
   parser.add_argument('-t', '--test', action='store_true',
                       help='Run a basic test sequence.')
-  parser.add_argument('-f', '--filename', default=None, type=str,
-                      help='File containing a LED sequence.')
   parser.add_argument('--red_pin_name', default="P8_13", type=str,
                       help='Name of the red PWM pin.')
   parser.add_argument('--green_pin_name', default="P8_19", type=str,
@@ -138,13 +151,20 @@ def main():
                       help='Name of the blue PWM pin.')
   parser.add_argument('--pwm_max_value', default=100, type=int,
                       help='Max value the PWM driver will accept.')
+  parser.add_argument('--red_balance', default=1.0, type=float,
+                      help='Red balance (0 - 1.0).')
+  parser.add_argument('--green_balance', default=1.0, type=float,
+                      help='Green balance (0 - 1.0).')
+  parser.add_argument('--blue_balance', default=0.9, type=float,
+                      help='Blue balance (0 - 1.0).')
   args = parser.parse_args()
 
   logging.basicConfig(format='%(levelname)s:%(message)s', 
                       level=logging.WARNING - 10 * (args.verbose or 0))
   array = led_array.LedArray(args.red_pin_name, args.green_pin_name,
                                  args.blue_pin_name, args.pwm_max_value)
-  cam_processor = CameraProcessor(args.pwm_max_value)
+  cam_processor = CameraProcessor(args.pwm_max_value, args.red_balance,
+                                  args.green_balance, args.blue_balance)
 
   if args.test:
     image = cam_processor.capture_image()
