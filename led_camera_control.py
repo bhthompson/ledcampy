@@ -17,10 +17,11 @@ _CAMERA_FRAME_H = 120
 class CameraProcessor:
   """Camera processing mechanisms for finding values to control RGB LEDs."""
   def __init__(self, pwm_max, r_bal = 1.0, g_bal = 1.0, b_bal = 1.0):
+    assert 0 <= r_bal <= 1, 'invalid R balance value: %f' % r_bal
+    assert 0 <= g_bal <= 1, 'invalid G balance value: %f' % g_bal
+    assert 0 <= b_bal <= 1, 'invalid B balance value: %f' % b_bal
     self.cam = cv2.VideoCapture(0)
-    if not self.cam.isOpened():
-      logging.error('Failed to initialize camera.')
-      sys.exit()
+    assert self.cam.isOpened(), 'failed to open the camera capture interface'
     self.cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, _CAMERA_FRAME_W)
     self.cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, _CAMERA_FRAME_H)
     self.last_r = 0
@@ -40,14 +41,14 @@ class CameraProcessor:
                         h_end = .75):
     """Find the average RGB values for a region of an image, the region is
     defined by relative fractions into the image."""
-    if v_start > v_end or h_start > h_end or v_end > 1 or h_end > 1:
-      logging.error('Invalid region parameters! v_start: %f, v_end: %f, '
-                    'h_start: %f, h_end: %f', v_start, v_end, h_start, h_end)
-      return
+    assert v_start < v_end and h_start < h_end, \
+      'region must be defined positively'
+    assert 0 <= v_start <= 1 and 0 <= v_end <= 1, \
+      'vertical region must be defined with fractions'
+    assert 0 <= h_start <= 1 and 0 <= h_end <= 1, \
+      'horizontal region must be defined with fractions'
     (v, h, c) = image.shape
-    if c != 3:
-      logging.error('Image is not 3 channel, only BGR numpy array supported.')
-      return
+    assert c == 3, 'Image must be 3 channel, only BGR numpy array supported.'
     # Be warned, there is a reasonable chance of overflowing here, so
     # we use long variables.
     r_sum = long(0)
