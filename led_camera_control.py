@@ -11,31 +11,22 @@ import sys
 import threading
 import time
 
-_CAMERA_FRAME_W = 160
-_CAMERA_FRAME_H = 120
-
 class CameraProcessor:
   """Camera processing mechanisms for finding values to control RGB LEDs."""
-  def __init__(self, pwm_max, r_bal = 1.0, g_bal = 1.0, b_bal = 1.0):
+  def __init__(self, pwm_max, w, h, r_bal, g_bal, b_bal, dark_threshold):
     assert 0 <= r_bal <= 1, 'invalid R balance value: %f' % r_bal
     assert 0 <= g_bal <= 1, 'invalid G balance value: %f' % g_bal
     assert 0 <= b_bal <= 1, 'invalid B balance value: %f' % b_bal
     self.cam = cv2.VideoCapture(0)
     assert self.cam.isOpened(), 'failed to open the camera capture interface'
-    self.cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, _CAMERA_FRAME_W)
-    self.cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, _CAMERA_FRAME_H)
-    self.last_r = 0
-    self.last_g = 0
-    self.last_b = 0
+    self.cam.set(cv.CV_CAP_PROP_FRAME_WIDTH, w)
+    self.cam.set(cv.CV_CAP_PROP_FRAME_HEIGHT, h)
     self.r_balance = r_bal
     self.g_balance = g_bal
     self.b_balance = b_bal
     self.pwm_max = pwm_max
-
-  def average_and_scale(self, image):
-    r, g, b = self.average_of_region(image)
-    r, g, b = self.color_balance(r, g, b)
-    return self.scale_to_pwm(r, g, b)
+    self.darkness_threshold = dark_threshold
+    self.dark_count = 0
 
   def average_of_region(self, image, v_start = .25, v_end = .75, h_start = .25,
                         h_end = .75):
@@ -86,6 +77,21 @@ class CameraProcessor:
                   g_corrected, b_corrected)
     return (r_corrected, g_corrected, b_corrected)
 
+  def increment_dark_count(self, r, g, b):
+    """Check if the input is too dark, and increment if so, clear if not."""
+    if r + g + b < self.darkness_threshold:
+      self.dark_count += 1
+      logging.debug('Dark input detected, dark_count: %d', self.dark_count)
+    else:
+      self.dark_count = 0
+      logging.debug('Bright input detected, dark_count cleared')
+
+  def process_image(self, image):
+    r, g, b = self.average_of_region(image)
+    r, g, b = self.color_balance(r, g, b)
+    self.increment_dark_count(r, g, b)
+    return self.scale_to_pwm(r, g, b)
+
   def scale_to_pwm(self, r, g, b):
     """Scale the RGB value to within the maximum PWM value."""
     #Widen the scaling so the lowest value is effectively minimized.
@@ -115,10 +121,14 @@ class ControlThreads:
     self.b = 0
 
   def cam_thread_func(self):
-    #TODO: find some way to determine when we should be off.
     while(1):
       image = self.cam_processor.capture_image()
-      self.r, self.g, self.b = self.cam_processor.average_and_scale(image)
+      r, g, b = self.cam_processor.process_image(image)
+      # turn off LEDs if the camera input is too dark
+      if self.cam_processor.dark_count > 25:
+        self.r, self.g, self.b = (0, 0, 0)
+      else:
+        self.r, self.g, self.b = (r, g, b)
       if self.exit_event.is_set():
         logging.debug('cam_thread_func: exit event caught.')
         self.array.__exit__()
@@ -152,20 +162,28 @@ def main():
                       help='Name of the blue PWM pin.')
   parser.add_argument('--pwm_max_value', default=100, type=int,
                       help='Max value the PWM driver will accept.')
+  parser.add_argument('--camera_h', default=160, type=int,
+                      help='Horizontal resolution for the camera.')
+  parser.add_argument('--camera_v', default=120, type=int,
+                      help='Vertical resolution for the camera.')
   parser.add_argument('--red_balance', default=1.0, type=float,
                       help='Red balance (0 - 1.0).')
   parser.add_argument('--green_balance', default=1.0, type=float,
                       help='Green balance (0 - 1.0).')
   parser.add_argument('--blue_balance', default=0.9, type=float,
                       help='Blue balance (0 - 1.0).')
+  parser.add_argument('--darkness_threshold', default=25, type=int,
+                      help='Threshold to consider the camera dark.')
   args = parser.parse_args()
 
   logging.basicConfig(format='%(levelname)s:%(message)s', 
                       level=logging.WARNING - 10 * (args.verbose or 0))
   array = led_array.LedArray(args.red_pin_name, args.green_pin_name,
                                  args.blue_pin_name, args.pwm_max_value)
-  cam_processor = CameraProcessor(args.pwm_max_value, args.red_balance,
-                                  args.green_balance, args.blue_balance)
+  cam_processor = CameraProcessor(args.pwm_max_value, args.camera_h,
+                                  args.camera_v, args.red_balance,
+                                  args.green_balance, args.blue_balance,
+                                  args.darkness_threshold)
 
   if args.test:
     image = cam_processor.capture_image()
